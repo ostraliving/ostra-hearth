@@ -185,7 +185,7 @@ exports.handler = async (event) => {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -202,7 +202,7 @@ exports.handler = async (event) => {
       return { statusCode: 500, body: JSON.stringify({ error: data }) };
     }
 
-    console.log(`✓ Welcome email sent to ${email} (${hasBaby ? 'baby' : hasKids ? 'family' : 'adults'} version)`);
+    console.log('Welcome email sent to ' + email + ' (' + (hasBaby ? 'baby' : hasKids ? 'family' : 'adults') + ' version)');
     return {
       statusCode: 200,
       headers: { 'Access-Control-Allow-Origin': 'https://hearth.ostraliving.com' },
