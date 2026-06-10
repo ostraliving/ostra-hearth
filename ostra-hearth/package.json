@@ -1,0 +1,8 @@
+{
+  "name": "ostra-hearth",
+  "version": "1.0.0",
+  "description": "Ostra Hearth — family meal planning app",
+  "dependencies": {
+    "stripe": "^14.0.0"
+  }
+}
