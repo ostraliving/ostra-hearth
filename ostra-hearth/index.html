@@ -5181,17 +5181,12 @@ async function handleCreateAccount() {
  try {
  const data = await supaSignUp(email, password, name);
  if (data.error) { showAuthError('ca-error', data.error.message || data.msg || 'Sign-up failed.'); return; }
- if (data.access_token) {
- // Auto-confirmed (email confirmation disabled in Supabase settings)
- saveSession(data);
- await upsertProfile(data.user, name);
- await loadSubscriptionStatus();
- // Send welcome email via Netlify function (fire and forget)
+ // Send welcome email via Netlify function (fire and forget, works for both confirmation flows)
  fetch('/.netlify/functions/send-welcome', {
    method: 'POST',
    headers: { 'Content-Type': 'application/json' },
    body: JSON.stringify({
-     email: data.user?.email,
+     email: data.user?.email || email,
      name,
      family: {
        adults: family.adults || 1,
@@ -5199,7 +5194,15 @@ async function handleCreateAccount() {
        babies: family.babies || 0
      }
    })
- }).catch(e => console.log('Welcome email skipped:', e));
+ }).then(r => {
+   if (!r.ok) r.json().then(d => console.error('Welcome email failed:', r.status, d));
+ }).catch(e => console.error('Welcome email error:', e));
+
+ if (data.access_token) {
+ // Auto-confirmed (email confirmation disabled in Supabase settings)
+ saveSession(data);
+ await upsertProfile(data.user, name);
+ await loadSubscriptionStatus();
  launchApp(name);
  } else {
  // Email confirmation required
