@@ -1250,6 +1250,23 @@ nav button.active { color:var(--forest);border-bottom-color:var(--forest);font-w
  </div>
  </div>
 
+ <!-- Reset Password Form (shown when user arrives via recovery link) -->
+ <div id="form-reset" style="display:none">
+  <div class="auth-form">
+   <p style="font-family:'DM Sans',sans-serif;font-size:12px;font-weight:300;color:var(--mid);margin:0 0 16px;line-height:1.6;">Choose a new password for your account.</p>
+   <div class="auth-field">
+    <label class="auth-label">New Password</label>
+    <input class="auth-input" id="rp-password" type="password" placeholder="Min. 6 characters" autocomplete="new-password">
+   </div>
+   <div class="auth-field">
+    <label class="auth-label">Confirm Password</label>
+    <input class="auth-input" id="rp-confirm" type="password" placeholder="Repeat password" autocomplete="new-password">
+   </div>
+   <div class="auth-error" id="rp-error"></div>
+   <button class="auth-btn-primary" onclick="handleSetNewPassword()">Set New Password</button>
+  </div>
+ </div>
+
  <!-- Create Account Form -->
  <div id="form-create" style="display:none">
  <div class="auth-form">
@@ -5286,6 +5303,14 @@ async function handleOAuthCallback() {
  const accessToken = params.get('access_token');
  const refreshToken = params.get('refresh_token');
  if (!accessToken) return false;
+
+ // Password recovery — show reset form instead of signing in
+ if (params.get('type') === 'recovery') {
+   window._recoveryToken = accessToken;
+   window.history.replaceState({}, '', window.location.pathname);
+   return 'recovery';
+ }
+
  try {
  const res = await fetch(SUPA_URL + '/auth/v1/user', {
  headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + accessToken }
@@ -5297,6 +5322,60 @@ async function handleOAuthCallback() {
  window.history.replaceState({}, '', window.location.pathname);
  return true;
  } catch(e) { return false; }
+}
+
+// ── RESET PASSWORD FORM ──
+function showResetForm() {
+ document.getElementById('auth-screen').classList.remove('hidden');
+ document.querySelector('.auth-tabs').style.display = 'none';
+ document.getElementById('form-signin').style.display = 'none';
+ document.getElementById('form-create').style.display = 'none';
+ document.getElementById('form-reset').style.display = '';
+}
+
+async function handleSetNewPassword() {
+ const password = document.getElementById('rp-password').value;
+ const confirm  = document.getElementById('rp-confirm').value;
+ const errEl    = document.getElementById('rp-error');
+ const btn      = document.querySelector('#form-reset .auth-btn-primary');
+
+ function showErr(msg) { errEl.textContent = msg; errEl.style.color = ''; errEl.classList.add('show'); }
+ errEl.classList.remove('show');
+
+ if (password.length < 6) { showErr('Password must be at least 6 characters.'); return; }
+ if (password !== confirm) { showErr('Passwords do not match.'); return; }
+
+ btn.disabled = true; btn.textContent = 'Please wait…';
+ try {
+   const res = await fetch(SUPA_URL + '/auth/v1/user', {
+     method: 'PATCH',
+     headers: {
+       'apikey': SUPA_KEY,
+       'Authorization': 'Bearer ' + window._recoveryToken,
+       'Content-Type': 'application/json'
+     },
+     body: JSON.stringify({ password })
+   });
+   if (!res.ok) {
+     const d = await res.json().catch(() => ({}));
+     showErr(d.message || d.msg || 'Unable to update password. Please try again.');
+     return;
+   }
+   // Success — show confirmation then restore sign-in view
+   errEl.style.color = 'var(--sage)';
+   errEl.textContent = 'Password updated. Please sign in.';
+   errEl.classList.add('show');
+   window._recoveryToken = null;
+   setTimeout(() => {
+     document.querySelector('.auth-tabs').style.display = '';
+     document.getElementById('form-reset').style.display = 'none';
+     switchAuthTab('signin');
+   }, 1800);
+ } catch(e) {
+   showErr('Something went wrong. Please try again.');
+ } finally {
+   btn.disabled = false; btn.textContent = 'Set New Password';
+ }
 }
 
 function launchApp(name) {
@@ -5510,9 +5589,13 @@ function showIOSInstallModal() {
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', async () => {
- // 1. Check for OAuth redirect callback (Google/Apple)
+ // 1. Check for OAuth redirect callback (Google/Apple) or password recovery
  if (window.location.hash.includes('access_token')) {
  const ok = await handleOAuthCallback();
+ if (ok === 'recovery') {
+ showResetForm();
+ return;
+ }
  if (ok) {
  const session = getSession();
  const name = session?.user?.user_metadata?.name || session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || 'there';
