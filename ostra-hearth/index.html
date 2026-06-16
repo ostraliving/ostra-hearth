@@ -796,6 +796,31 @@ nav button.active { color:var(--forest);border-bottom-color:var(--forest);font-w
  #pwa-banner { bottom:calc(24px + env(safe-area-inset-bottom)); }
 }
 </style>
+<script>
+/* EARLY RECOVERY CAPTURE — runs before anything else can touch the URL.
+   Supabase reset links redirect here with the token in the hash or query.
+   We capture it immediately into a global so the app can show the reset screen. */
+(function() {
+  try {
+    var hash = window.location.hash || '';
+    var search = window.location.search || '';
+    var combined = hash + '&' + search;
+    if (combined.indexOf('type=recovery') !== -1) {
+      window.__OSTRA_RECOVERY__ = {
+        hash: hash,
+        search: search,
+        captured: true
+      };
+      // Pull access_token from hash if present
+      var hp = new URLSearchParams(hash.replace(/^#/, ''));
+      var qp = new URLSearchParams(search.replace(/^\?/, ''));
+      window.__OSTRA_RECOVERY__.access_token = hp.get('access_token') || '';
+      window.__OSTRA_RECOVERY__.token_hash = hp.get('token_hash') || qp.get('token_hash') || '';
+      window.__OSTRA_RECOVERY__.code = qp.get('code') || hp.get('code') || '';
+    }
+  } catch(e) {}
+})();
+</script>
 </head>
 <body>
 <!-- SUNDAY SURPRISE ME NUDGE -->
@@ -1244,6 +1269,39 @@ nav button.active { color:var(--forest);border-bottom-color:var(--forest);font-w
 <div class="recipe-overlay" id="recipe-overlay" onclick="recipeBgClick(event)">
  <button class="recipe-close" onclick="closeRecipe()">✕</button>
  <div class="recipe-page" id="recipe-page"></div>
+</div>
+
+<!-- PASSWORD RESET SCREEN -->
+<div id="reset-screen" class="hidden" style="position:fixed;inset:0;background:var(--forest);z-index:10001;display:none;flex-direction:column;align-items:center;justify-content:center;padding:32px 28px;overflow-y:auto;">
+  <div class="auth-logo">
+    <svg class="auth-leaf" width="44" height="52" viewBox="0 0 64 64" fill="none">
+      <line x1="32" y1="58" x2="32" y2="14" stroke="#B5BBA8" stroke-width="0.75" stroke-linecap="round"/>
+      <path d="M32 42 C32 42 20 38 18 28 C18 28 30 30 32 42Z" fill="none" stroke="#B5BBA8" stroke-width="0.75"/>
+      <path d="M32 30 C32 30 22 24 22 15 C22 15 32 20 32 30Z" fill="none" stroke="#B5BBA8" stroke-width="0.75"/>
+      <path d="M32 48 C32 48 44 44 46 34 C46 34 34 36 32 48Z" fill="#B5BBA8" fill-opacity="0.3" stroke="#B5BBA8" stroke-width="0.75"/>
+      <path d="M32 36 C32 36 42 30 42 21 C42 21 32 26 32 36Z" fill="#B5BBA8" fill-opacity="0.2" stroke="#B5BBA8" stroke-width="0.75"/>
+      <ellipse cx="32" cy="12" rx="2.5" ry="4" fill="none" stroke="#B5BBA8" stroke-width="0.75"/>
+    </svg>
+    <div class="auth-wordmark">Ostra</div>
+    <div class="auth-sub">Hearth</div>
+  </div>
+  <div class="auth-card">
+    <div style="font-family:'Playfair Display',serif;font-weight:400;font-size:20px;color:var(--ink);margin-bottom:6px;text-align:center;">Set a new password</div>
+    <div style="font-size:12px;color:var(--mid);margin-bottom:22px;text-align:center;line-height:1.5;">Choose a new password for your account.</div>
+    <div class="auth-form">
+      <div class="auth-field">
+        <label class="auth-label">New Password</label>
+        <input class="auth-input" id="reset-password" type="password" placeholder="Min. 6 characters" autocomplete="new-password">
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">Confirm Password</label>
+        <input class="auth-input" id="reset-password-confirm" type="password" placeholder="Re-enter password" autocomplete="new-password">
+      </div>
+      <div class="auth-error" id="reset-error"></div>
+      <button class="auth-btn-primary" onclick="handleSetNewPassword()">Update Password</button>
+      <button type="button" onclick="handleResendReset()" style="background:none;border:none;width:100%;text-align:center;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:300;color:var(--reed);cursor:pointer;padding:10px 0 2px;letter-spacing:.3px;">Link expired? Resend reset email</button>
+    </div>
+  </div>
 </div>
 
 <div id="auth-screen">
@@ -4658,9 +4716,43 @@ function genShopList() {
  if(CANON[n]==='__skip__') return null;
  if(CANON[n]) return{key:CANON[n],qty,unit};
 
- // No mapping found — use cleaned name as key
+ // No mapping found — normalize plurals & known synonyms before using as key
  if(!n||n.length<2)return null;
+ n = normalizeFinalKey(n);
+ if(CANON[n]) return{key:CANON[n],qty,unit};
  return{key:n,qty,unit};
+ }
+
+ // Final key normalizer — collapses singular/plural and common synonyms
+ function normalizeFinalKey(n){
+   n = n.trim();
+   // Known synonym collapses (do these BEFORE pluralization)
+   const SYN = {
+     'baby spinach':'spinach','baby kale':'kale','baby arugula':'arugula',
+     'cherry tomato':'cherry tomatoes','grape tomato':'cherry tomatoes','grape tomatoes':'cherry tomatoes',
+     'plum tomato':'tomatoes','plum tomatoes':'tomatoes','ripe tomato':'tomatoes','ripe tomatoes':'tomatoes',
+     'roma tomato':'tomatoes','roma tomatoes':'tomatoes','vine tomato':'tomatoes','vine tomatoes':'tomatoes',
+     'scallion':'green onion','scallions':'green onions','spring onion':'green onion','spring onions':'green onions',
+     'coriander':'cilantro','coriander leaves':'cilantro','fresh coriander':'cilantro',
+     'garbanzo':'chickpeas','garbanzos':'chickpeas','garbanzo beans':'chickpeas',
+     'courgette':'zucchini','courgettes':'zucchini','aubergine':'eggplant','aubergines':'eggplant',
+     'rocket':'arugula','capsicum':'bell pepper','capsicums':'bell peppers',
+     'natural yogurt':'yogurt','plain yogurt':'yogurt','greek yoghurt':'greek yogurt','yoghurt':'yogurt',
+   };
+   if(SYN[n]) return SYN[n];
+   // Pluralize common produce so "carrot"/"carrots" merge (keep plural as canonical)
+   const PLURAL_BASE = ['carrot','tomato','potato','onion','lemon','lime','egg','clementine',
+     'mushroom','pepper','chile','chili','apple','banana','date','olive','fillet','breast',
+     'thigh','sardine','anchovy','scallop','prawn','shrimp','grape','radish','beet','shallot',
+     'apricot','peach','plum','fig','strawberry','blueberry','raspberry'];
+   for(const base of PLURAL_BASE){
+     if(n===base){
+       if(base.endsWith('y')) return base.slice(0,-1)+'ies';
+       if(base.endsWith('o')) return base+'es';
+       return base+'s';
+     }
+   }
+   return n;
  }
 
  // ── CATEGORY CLASSIFIER ──────────────────────────────────────
@@ -4926,10 +5018,10 @@ function findAndOpenRecipe(name) {
 const INSTACART_PARTNER_ID = 'YOUR_PARTNER_ID';
 
 // ─────────────────────────────────────────────────────────────
-// AMAZON ASSOCIATES TAG — replace 'weeknight-20' with your
+// AMAZON ASSOCIATES TAG — replace 'ostraliving-20' with your
 // actual tag from affiliate-program.amazon.com
 // ─────────────────────────────────────────────────────────────
-const AMAZON_TAG = 'weeknight-20';
+const AMAZON_TAG = 'ostraliving-20';
 
 function getShopItems() {
  // Extract clean ingredient names from the rendered shopping list
@@ -4954,19 +5046,25 @@ function _openInstacartInner() {
  if(!items.length) { showToast('Build your plan first to generate a shopping list.'); return; }
 
  if(INSTACART_PARTNER_ID === 'YOUR_PARTNER_ID') {
- // Not yet activated — fall back to Instacart search for first item
- // as a demo, and show a friendly message
- showToast('Instacart integration coming soon! Copying list instead.');
+ // Not yet activated — use Instacart's public ingredient search as a working fallback.
+ // This still opens Instacart with your items so users can shop; affiliate credit
+ // activates once you add your real partner ID below.
  copyList();
+ // Instacart's universal search accepts a query — open with the full list copied
+ const query = encodeURIComponent(items.slice(0, 5).join(', '));
+ window.open('https://www.instacart.com/store/s?k=' + query, '_blank');
+ showToast('List copied — opening Instacart. Paste to search, or shop item by item.');
  return;
  }
 
- // Instacart shoppable recipe URL format
- // https://www.instacart.com/store/partner_recipe?partner_id=X&ingredients[]=Y
+ // ACTIVATED: Instacart Developer Platform "Create Shopping List" API
+ // Docs: https://docs.instacart.com/developer_platform_api
+ // The recipe/list page URL format with your partner credentials:
  const base = 'https://www.instacart.com/store/partner_recipe';
  const params = new URLSearchParams();
  params.set('partner_id', INSTACART_PARTNER_ID);
  params.set('utm_source', 'ostra-hearth');
+ params.set('utm_medium', 'affiliate');
  items.forEach(item => params.append('ingredients[]', item));
  window.open(base + '?' + params.toString(), '_blank');
 }
@@ -5417,6 +5515,201 @@ async function handleSignIn() {
 }
 
 // ── FORGOT PASSWORD ──
+
+// ══ PASSWORD RESET (recovery flow) ══
+function checkForRecoveryToken() {
+  // Use the early-captured recovery data (grabbed in <head> before anything could strip it)
+  var rec = window.__OSTRA_RECOVERY__;
+  // Fallback to reading current URL if early capture missed it
+  if (!rec || !rec.captured) {
+    var hash = window.location.hash || '';
+    var search = window.location.search || '';
+    if (hash.indexOf('type=recovery') === -1 && search.indexOf('type=recovery') === -1) {
+      return false;
+    }
+    var hp = new URLSearchParams(hash.replace(/^#/, ''));
+    var qp = new URLSearchParams(search.replace(/^\?/, ''));
+    rec = {
+      captured: true,
+      access_token: hp.get('access_token') || '',
+      token_hash: hp.get('token_hash') || qp.get('token_hash') || '',
+      code: qp.get('code') || hp.get('code') || ''
+    };
+  }
+
+  if (!rec || !rec.captured) return false;
+
+  // We have a recovery link — show the reset screen no matter what
+  showResetScreen();
+  history.replaceState(null, '', window.location.pathname);
+
+  // Now establish the recovery token by whichever method applies
+  if (rec.access_token) {
+    window._recoveryToken = rec.access_token;
+  } else if (rec.token_hash) {
+    verifyRecoveryToken(rec.token_hash);
+  } else if (rec.code) {
+    exchangeCodeForSession(rec.code);
+  } else {
+    // The link pointed at Supabase /verify which should have redirected with a token.
+    // If we got here with type=recovery but no token, the verify likely succeeded
+    // and set a session cookie — try to get the current user session.
+    establishRecoverySession();
+  }
+  return true;
+}
+
+async function establishRecoverySession() {
+  // Last-resort: check if Supabase set a session we can use
+  try {
+    var session = getSession();
+    if (session && session.access_token) {
+      window._recoveryToken = session.access_token;
+      return;
+    }
+  } catch(e) {}
+  var errEl = document.getElementById('reset-error');
+  if (errEl) {
+    errEl.style.color = '#c0392b';
+    errEl.textContent = 'Reset link received but the token could not be read. Tap "Resend reset email" below for a fresh link.';
+    errEl.classList.add('show');
+  }
+}
+
+// Diagnostic: if you ever need to see what the reset URL contained,
+// append ?debug=1 to the app URL and check the reset screen.
+function showRecoveryDebug() {
+  var rec = window.__OSTRA_RECOVERY__ || {};
+  var errEl = document.getElementById('reset-error');
+  if (errEl) {
+    errEl.style.color = 'var(--mid)';
+    errEl.textContent = 'Debug — hash:' + (rec.hash||'none').slice(0,40) + ' | token:' + (rec.access_token?'yes':'no') + ' | token_hash:' + (rec.token_hash?'yes':'no') + ' | code:' + (rec.code?'yes':'no');
+    errEl.classList.add('show');
+  }
+}
+
+function showResetScreen() {
+  const authScreen = document.getElementById('auth-screen');
+  const resetScreen = document.getElementById('reset-screen');
+  if (authScreen) authScreen.classList.add('hidden');
+  if (resetScreen) { resetScreen.classList.remove('hidden'); resetScreen.style.display = 'flex'; }
+}
+
+
+async function exchangeCodeForSession(code) {
+  try {
+    const res = await fetch(SUPA_URL + '/auth/v1/token?grant_type=pkce', {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auth_code: code })
+    });
+    const data = await res.json();
+    if (res.ok && data.access_token) {
+      window._recoveryToken = data.access_token;
+    } else {
+      const errEl = document.getElementById('reset-error');
+      if (errEl) { errEl.style.color = '#c0392b'; errEl.textContent = 'This reset link could not be verified. Tap "Resend reset email" below.'; errEl.classList.add('show'); }
+    }
+  } catch(e) {
+    const errEl = document.getElementById('reset-error');
+    if (errEl) { errEl.style.color = '#c0392b'; errEl.textContent = 'Could not verify the reset link. Please request a new one.'; errEl.classList.add('show'); }
+  }
+}
+
+async function verifyRecoveryToken(tokenHash) {
+  try {
+    const res = await fetch(SUPA_URL + '/auth/v1/verify', {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'recovery', token_hash: tokenHash })
+    });
+    const data = await res.json();
+    if (res.ok && data.access_token) {
+      window._recoveryToken = data.access_token;
+    } else {
+      const errEl = document.getElementById('reset-error');
+      if (errEl) { errEl.style.color = '#c0392b'; errEl.textContent = 'This reset link has expired or was already used. Tap "Resend reset email" below.'; errEl.classList.add('show'); }
+    }
+  } catch(e) {
+    const errEl = document.getElementById('reset-error');
+    if (errEl) { errEl.style.color = '#c0392b'; errEl.textContent = 'Could not verify the reset link. Please request a new one.'; errEl.classList.add('show'); }
+  }
+}
+
+
+async function handleResendReset() {
+  const errEl = document.getElementById('reset-error');
+  // Ask for email via prompt-style inline field
+  let email = window._recoveryEmail || '';
+  if (!email) {
+    email = prompt('Enter your email to resend the reset link:');
+    if (!email) return;
+  }
+  email = email.trim().toLowerCase();
+  if (!email.includes('@')) { errEl.style.color='#c0392b'; errEl.textContent='Please enter a valid email.'; errEl.classList.add('show'); return; }
+  try {
+    await fetch(SUPA_URL + '/auth/v1/recover', {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    errEl.style.color = 'var(--sage)';
+    errEl.textContent = 'A fresh reset link is on its way. Check your email.';
+    errEl.classList.add('show');
+  } catch(e) {
+    errEl.style.color = '#c0392b';
+    errEl.textContent = 'Could not resend. Please try again.';
+    errEl.classList.add('show');
+  }
+}
+
+async function handleSetNewPassword() {
+  const pw      = document.getElementById('reset-password').value;
+  const pwConf  = document.getElementById('reset-password-confirm').value;
+  const errEl   = document.getElementById('reset-error');
+  errEl.style.color = '#c0392b';
+  if (pw.length < 6)  { errEl.textContent = 'Password must be at least 6 characters.'; errEl.classList.add('show'); return; }
+  if (pw !== pwConf)  { errEl.textContent = 'Passwords do not match.'; errEl.classList.add('show'); return; }
+  const token = window._recoveryToken;
+  if (!token) { errEl.textContent = 'Reset link expired. Please request a new one.'; errEl.classList.add('show'); return; }
+
+  const btn = document.querySelector('#reset-screen .auth-btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+
+  try {
+    // Use the recovery access token to update the user's password
+    const res = await fetch(SUPA_URL + '/auth/v1/user', {
+      method: 'PUT',
+      headers: {
+        'apikey': SUPA_KEY,
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ password: pw })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.msg || data.error_description || 'Could not update password. The link may have expired.';
+      errEl.classList.add('show');
+      if (btn) { btn.disabled = false; btn.textContent = 'Update Password'; }
+      return;
+    }
+    // Success — hide reset screen, show sign-in with a success note
+    const resetScreen = document.getElementById('reset-screen');
+    if (resetScreen) { resetScreen.classList.add('hidden'); resetScreen.style.display = 'none'; }
+    window._recoveryToken = null;
+    const authScreen = document.getElementById('auth-screen');
+    if (authScreen) authScreen.classList.remove('hidden');
+    switchAuthTab('signin');
+    const siErr = document.getElementById('si-error');
+    if (siErr) { siErr.style.color = 'var(--sage)'; siErr.textContent = 'Password updated. Please sign in with your new password.'; siErr.classList.add('show'); }
+  } catch(e) {
+    errEl.textContent = 'Connection error. Please try again.';
+    errEl.classList.add('show');
+    if (btn) { btn.disabled = false; btn.textContent = 'Update Password'; }
+  }
+}
+
 async function handleForgotPassword() {
  const email = document.getElementById('si-email').value.trim().toLowerCase();
  if (!email || !email.includes('@')) {
@@ -5479,59 +5772,16 @@ async function handleOAuthCallback() {
  } catch(e) { return false; }
 }
 
-// ── RESET PASSWORD FORM ──
+// ── RESET PASSWORD FORM (redirects to the active reset screen) ──
 function showResetForm() {
- document.getElementById('auth-screen').classList.remove('hidden');
- document.querySelector('.auth-tabs').style.display = 'none';
- document.getElementById('form-signin').style.display = 'none';
- document.getElementById('form-create').style.display = 'none';
- document.getElementById('form-reset').style.display = '';
+ // Defer to the standalone reset-screen which has the working update handler
+ showResetScreen();
 }
 
-async function handleSetNewPassword() {
- const password = document.getElementById('rp-password').value;
- const confirm  = document.getElementById('rp-confirm').value;
- const errEl    = document.getElementById('rp-error');
- const btn      = document.querySelector('#form-reset .auth-btn-primary');
 
- function showErr(msg) { errEl.textContent = msg; errEl.style.color = ''; errEl.classList.add('show'); }
- errEl.classList.remove('show');
 
- if (password.length < 6) { showErr('Password must be at least 6 characters.'); return; }
- if (password !== confirm) { showErr('Passwords do not match.'); return; }
 
- btn.disabled = true; btn.textContent = 'Please wait…';
- try {
-   const res = await fetch(SUPA_URL + '/auth/v1/user', {
-     method: 'PATCH',
-     headers: {
-       'apikey': SUPA_KEY,
-       'Authorization': 'Bearer ' + window._recoveryToken,
-       'Content-Type': 'application/json'
-     },
-     body: JSON.stringify({ password })
-   });
-   if (!res.ok) {
-     const d = await res.json().catch(() => ({}));
-     showErr(d.message || d.msg || 'Unable to update password. Please try again.');
-     return;
-   }
-   // Success — show confirmation then restore sign-in view
-   errEl.style.color = 'var(--sage)';
-   errEl.textContent = 'Password updated. Please sign in.';
-   errEl.classList.add('show');
-   window._recoveryToken = null;
-   setTimeout(() => {
-     document.querySelector('.auth-tabs').style.display = '';
-     document.getElementById('form-reset').style.display = 'none';
-     switchAuthTab('signin');
-   }, 1800);
- } catch(e) {
-   showErr('Something went wrong. Please try again.');
- } finally {
-   btn.disabled = false; btn.textContent = 'Set New Password';
- }
-}
+
 
 function launchApp(name) {
  document.getElementById('auth-screen').classList.add('hidden');
@@ -5744,6 +5994,9 @@ function showIOSInstallModal() {
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', async () => {
+  // Check for password recovery link first — overrides normal flow
+  if (checkForRecoveryToken()) return;
+
  // 1. Check for OAuth redirect callback (Google/Apple) or password recovery
  if (window.location.hash.includes('access_token')) {
  const ok = await handleOAuthCallback();
