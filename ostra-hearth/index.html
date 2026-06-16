@@ -804,19 +804,32 @@ nav button.active { color:var(--forest);border-bottom-color:var(--forest);font-w
   try {
     var hash = window.location.hash || '';
     var search = window.location.search || '';
-    var combined = hash + '&' + search;
-    if (combined.indexOf('type=recovery') !== -1) {
+    var combined = hash + ' ' + search;
+    var hp = new URLSearchParams(hash.replace(/^#/, ''));
+    var qp = new URLSearchParams(search.replace(/^\?/, ''));
+
+    // Detect recovery by ANY of these signals
+    var isRecovery =
+      combined.indexOf('type=recovery') !== -1 ||
+      qp.get('type') === 'recovery' ||
+      hp.get('type') === 'recovery';
+
+    // Also capture if there's an auth token of any kind arriving at the root
+    var hasAuthToken =
+      hp.get('access_token') || hp.get('token_hash') ||
+      qp.get('token_hash') || qp.get('code') ||
+      combined.indexOf('error') !== -1;
+
+    if (isRecovery || (hasAuthToken && combined.indexOf('recovery') !== -1)) {
       window.__OSTRA_RECOVERY__ = {
-        hash: hash,
-        search: search,
-        captured: true
+        hash: hash, search: search, captured: true,
+        isRecovery: isRecovery,
+        access_token: hp.get('access_token') || '',
+        token_hash: hp.get('token_hash') || qp.get('token_hash') || '',
+        code: qp.get('code') || hp.get('code') || '',
+        error: hp.get('error') || qp.get('error') || '',
+        error_desc: hp.get('error_description') || qp.get('error_description') || ''
       };
-      // Pull access_token from hash if present
-      var hp = new URLSearchParams(hash.replace(/^#/, ''));
-      var qp = new URLSearchParams(search.replace(/^\?/, ''));
-      window.__OSTRA_RECOVERY__.access_token = hp.get('access_token') || '';
-      window.__OSTRA_RECOVERY__.token_hash = hp.get('token_hash') || qp.get('token_hash') || '';
-      window.__OSTRA_RECOVERY__.code = qp.get('code') || hp.get('code') || '';
     }
   } catch(e) {}
 })();
@@ -5520,6 +5533,8 @@ async function handleSignIn() {
 function checkForRecoveryToken() {
   // Use the early-captured recovery data (grabbed in <head> before anything could strip it)
   var rec = window.__OSTRA_RECOVERY__;
+  // DIAGNOSTIC: stash what arrived so we can inspect it if needed
+  try { if(rec) sessionStorage.setItem('oh_recovery_debug', JSON.stringify(rec)); } catch(e){}
   // Fallback to reading current URL if early capture missed it
   if (!rec || !rec.captured) {
     var hash = window.location.hash || '';
