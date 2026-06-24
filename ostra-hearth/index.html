@@ -389,6 +389,18 @@ nav button.active { color:var(--forest);border-bottom-color:var(--forest);font-w
 
 /* ── TOAST ── */
 .toast { position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--fog);padding:10px 18px;border-radius:8px;font-size:12px;font-weight:300;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;max-width:88vw;text-align:center; }
+.sheet-overlay { position:fixed;inset:0;background:rgba(26,26,24,.45);z-index:10000;display:none;align-items:flex-end;justify-content:center;backdrop-filter:blur(3px); }
+.sheet-overlay.show { display:flex; }
+.sheet { background:var(--white);width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:24px 20px calc(24px + env(safe-area-inset-bottom));box-shadow:var(--shadow2);transform:translateY(100%);transition:transform .28s cubic-bezier(.4,0,.2,1); }
+.sheet-overlay.show .sheet { transform:translateY(0); }
+.sheet-grip { width:36px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 18px; }
+.sheet-title { font-family:Georgia,serif;font-size:17px;font-weight:400;color:var(--ink);text-align:center;margin:0 0 4px; }
+.sheet-sub { font-size:12px;color:var(--mid);text-align:center;margin:0 0 20px;font-weight:300; }
+.sheet-btn { display:block;width:100%;padding:16px;margin-bottom:10px;border-radius:12px;border:1px solid var(--line);background:var(--white);color:var(--ink);font-family:inherit;font-size:15px;font-weight:400;cursor:pointer;transition:all .15s;text-align:center; }
+.sheet-btn:hover { background:var(--sage3);border-color:var(--sage); }
+.sheet-btn.primary { background:var(--forest);color:var(--white);border-color:var(--forest); }
+.sheet-btn.primary:hover { background:var(--ink); }
+.sheet-cancel { display:block;width:100%;padding:14px;margin-top:4px;border:none;background:none;color:var(--mid);font-family:inherit;font-size:13px;cursor:pointer; }
 .toast.show { opacity:1;pointer-events:all; }
 .empty-state { text-align:center;padding:60px 20px;color:var(--reed); }
 .empty-state .es-icon { margin-bottom:12px;opacity:.3; }
@@ -3563,7 +3575,9 @@ function buildSonPlan() {
  <div class="pslot"><div class="pslot-label">Lunch</div>
  <div class="pslot-val ${lItem?'filled':''}" onclick="${lItem?'':'openModal(\'son-l\',\''+d+'\')'}">
  ${lItem
- ? `<span class="pslot-name" onclick="event.stopPropagation();findAndOpenRecipe('${lItem.n.replace(/'/g,"\\'")}')">${lItem.n}</span><span class="clr" onclick="clrSlot(event,'son-l','${d}')">×</span>`
+ ? (lItem.isLeftover
+    ? `<span class="pslot-name" style="color:var(--sage);">${lItem.n}<br><span class="leftover-tag">↺ leftovers from ${DAYF[lItem.leftoverFrom]}</span></span><span class="clr" onclick="clrSlot(event,'son-l','${d}')">×</span>`
+    : `<span class="pslot-name" onclick="event.stopPropagation();findAndOpenRecipe('${lItem.n.replace(/'/g,"\\'")}')">${lItem.n}</span><span class="clr" onclick="clrSlot(event,'son-l','${d}')">×</span>`)
  : `<span class="pempty">Pick a lunch</span>`}
  </div></div>
  <div class="pslot"><div class="pslot-label">Snack</div>
@@ -3641,29 +3655,89 @@ function renderBatchCook() {
 function toggleLeftoverLunch(dinnerDay, lunchDay) {
   const dinner = plan.din[dinnerDay];
   if (!dinner) { showToast('Add a dinner first.'); return; }
-  const existing = plan.al[lunchDay];
-  if (existing && existing.leftoverFrom === dinnerDay) {
-    // Remove the leftover
-    plan.al[lunchDay] = null;
-    // Un-double the dinner if it was only doubled for this
-    doubledDinners.delete(dinner.n);
-    saveDoubled();
+  // If a leftover already exists for this dinner on either track, tapping removes it (toggle off)
+  const adultHas = plan.al[lunchDay] && plan.al[lunchDay].leftoverFrom === dinnerDay;
+  const kidsHas = plan.son[lunchDay] && plan.son[lunchDay].l && plan.son[lunchDay].l.leftoverFrom === dinnerDay;
+  if (adultHas || kidsHas) {
+    if (adultHas) plan.al[lunchDay] = null;
+    if (kidsHas) plan.son[lunchDay].l = null;
     showToast(`Removed leftovers from ${DAYF[lunchDay]} lunch.`);
-  } else {
-    if (existing && !existing.leftoverFrom) {
-      showToast(`${DAYF[lunchDay]} lunch is already planned. Clear it first.`);
-      return;
-    }
-    // Fill the lunch slot with the dinner as leftovers
-    plan.al[lunchDay] = { n: dinner.n, leftoverFrom: dinnerDay, isLeftover: true };
-    // Auto-double the dinner so groceries cover both meals
-    doubledDinners.add(dinner.n);
-    saveDoubled();
-    showToast(`${dinner.n} → ${DAYF[lunchDay]} lunch. Ingredients doubled for leftovers.`);
+    savePlan(); buildAllPlans();
+    if (document.getElementById('shop-tab')?.classList.contains('active')) genShopList();
+    return;
   }
-  savePlan();
-  buildAllPlans();
-  if (document.getElementById('shop-tab')?.classList.contains('active')) genShopList();
+  // No leftover yet — decide who it's for.
+  if (family.kids > 0) {
+    openLeftoverSheet(dinnerDay, lunchDay);   // ask Adults / Kids / Both
+  } else {
+    applyLeftover(dinnerDay, lunchDay, 'adults');  // no kids: straight to adult lunch
+  }
+}
+
+// Opens the bottom action sheet to choose who the leftover lunch is for
+function openLeftoverSheet(dinnerDay, lunchDay) {
+  const dinner = plan.din[dinnerDay];
+  let sheet = document.getElementById('leftover-sheet');
+  if (!sheet) {
+    sheet = document.createElement('div');
+    sheet.id = 'leftover-sheet';
+    sheet.className = 'sheet-overlay';
+    document.body.appendChild(sheet);
+    // Close when tapping the dark backdrop
+    sheet.addEventListener('click', (e) => { if (e.target === sheet) closeLeftoverSheet(); });
+  }
+  sheet.innerHTML = `
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <p class="sheet-title">Save for ${DAYF[lunchDay]} lunch</p>
+      <p class="sheet-sub">${dinner.n} as leftovers. Who is this lunch for?</p>
+      <button class="sheet-btn" onclick="applyLeftover('${dinnerDay}','${lunchDay}','adults')">Adults</button>
+      <button class="sheet-btn" onclick="applyLeftover('${dinnerDay}','${lunchDay}','kids')">Kids</button>
+      <button class="sheet-btn primary" onclick="applyLeftover('${dinnerDay}','${lunchDay}','both')">Both</button>
+      <button class="sheet-cancel" onclick="closeLeftoverSheet()">Cancel</button>
+    </div>`;
+  requestAnimationFrame(() => sheet.classList.add('show'));
+}
+
+function closeLeftoverSheet() {
+  const sheet = document.getElementById('leftover-sheet');
+  if (sheet) sheet.classList.remove('show');
+}
+
+// Writes the leftover into the chosen track(s) and doubles groceries accordingly
+function applyLeftover(dinnerDay, lunchDay, who) {
+  closeLeftoverSheet();
+  const dinner = plan.din[dinnerDay];
+  if (!dinner) { showToast('Add a dinner first.'); return; }
+  const leftover = { n: dinner.n, leftoverFrom: dinnerDay, isLeftover: true };
+  let placed = [];
+
+  if (who === 'adults' || who === 'both') {
+    if (plan.al[lunchDay] && !plan.al[lunchDay].leftoverFrom) {
+      showToast(`${DAYF[lunchDay]} adult lunch is already planned. Clear it first.`);
+    } else {
+      plan.al[lunchDay] = { ...leftover };
+      placed.push('adults');
+    }
+  }
+  if (who === 'kids' || who === 'both') {
+    if (!plan.son[lunchDay]) plan.son[lunchDay] = { l:null, s:null };
+    if (plan.son[lunchDay].l && !plan.son[lunchDay].l.leftoverFrom) {
+      showToast(`${DAYF[lunchDay]} kids' lunch is already planned. Clear it first.`);
+    } else {
+      plan.son[lunchDay].l = { ...leftover };
+      placed.push('kids');
+    }
+  }
+
+  if (placed.length) {
+    saveDoubled();
+    const whoLabel = placed.length === 2 ? 'adults and kids' : (placed[0] === 'kids' ? "kids" : 'adults');
+    showToast(`${dinner.n} → ${DAYF[lunchDay]} lunch for ${whoLabel}. Groceries adjusted for the extra servings.`);
+    savePlan();
+    buildAllPlans();
+    if (document.getElementById('shop-tab')?.classList.contains('active')) genShopList();
+  }
 }
 
 
@@ -3840,8 +3914,22 @@ function clearPlan() {
 // ══ SHOPPING LIST ══
 function genShopList() {
  const meals = [];
+ // Count how many leftover lunches point to each dinner, so we scale that dinner's groceries.
+ // A dinner feeds itself (1) plus each leftover lunch (adult and/or kids) referencing it.
+ const leftoverCountByDinnerName = {};
  DAYS.forEach(d => {
- if(plan.son[d].l) meals.push(plan.son[d].l);
+ if (plan.al[d] && plan.al[d].isLeftover && plan.al[d].leftoverFrom) {
+ const src = plan.din[plan.al[d].leftoverFrom];
+ if (src) leftoverCountByDinnerName[src.n] = (leftoverCountByDinnerName[src.n]||0) + 1;
+ }
+ if (plan.son[d] && plan.son[d].l && plan.son[d].l.isLeftover && plan.son[d].l.leftoverFrom) {
+ const src = plan.din[plan.son[d].l.leftoverFrom];
+ if (src) leftoverCountByDinnerName[src.n] = (leftoverCountByDinnerName[src.n]||0) + 1;
+ }
+ });
+ window.__leftoverCounts = leftoverCountByDinnerName;
+ DAYS.forEach(d => {
+ if(plan.son[d].l && !plan.son[d].l.isLeftover) meals.push(plan.son[d].l);
  if(plan.son[d].s) meals.push(plan.son[d].s);
  if(plan.din[d]) meals.push(plan.din[d]);
  if(plan.al[d] && !plan.al[d].isLeftover) meals.push(plan.al[d]);
@@ -4795,20 +4883,14 @@ function genShopList() {
  // ── AGGREGATE ─────────────────────────────────────────────────
  const ingMap={};
  meals.forEach(m=>{
+ // Determine how many EXTRA servings of this meal's ingredients are needed.
+ // - Leftover lunches pointing at this dinner each add one extra serving.
+ // - The manual "double" button adds one extra serving (kept for backward compatibility).
+ const leftoverExtra = (window.__leftoverCounts && window.__leftoverCounts[m.n]) ? window.__leftoverCounts[m.n] : 0;
+ const manualExtra = doubledDinners.has(m.n) ? 1 : 0;
+ // Avoid stacking manual-double on top of leftover scaling for the same dinner: take the larger.
+ const extraServings = Math.max(leftoverExtra, manualExtra);
  (m.ing||[]).forEach(raw=>{
- // Double quantity if this dinner is in doubledDinners
- if(doubledDinners.has(m.n)) {
- // Prepend quantity doubling by duplicating the entry
- const result2=canonicalise(raw);
- if(result2){const{key,qty,unit}=result2;const{qty:nq,unit:nu}=normaliseQty(qty,unit);
- const isSpice2=SPICE_RX.test(key);let cat2='Other';
- for(const c of CATS){if(c.rx.test(key)){cat2=c.l;break;}}
- if(ingMap[key]){const ex=ingMap[key];
- if(!isSpice2&&nq>0&&ex.qty>0&&ex.unit===nu)ex.qty+=nq;
- }else{ingMap[key]={qty:isSpice2?0:nq,unit:isSpice2?'':
-u,cat:cat2};}
- }
- }
  if(SKIP_RX.test(raw.trim())) return;
  const result=canonicalise(raw);
  if(!result)return;
@@ -4818,12 +4900,15 @@ u,cat:cat2};}
  const isSpice=SPICE_RX.test(key);
  let cat='Other';
  for(const c of CATS){if(c.rx.test(key)){cat=c.l;break;}}
+ // Base serving + any extra servings = total multiplier
+ const totalServings = 1 + extraServings;
+ const addQty = isSpice ? 0 : nq * totalServings;
  if(ingMap[key]){
  const ex=ingMap[key];
- if(!isSpice&&nq>0&&ex.qty>0&&ex.unit===nu)ex.qty+=nq;
- else if(!isSpice&&nq>0&&ex.qty===0){ex.qty=nq;ex.unit=nu;}
+ if(!isSpice&&nq>0&&ex.qty>0&&ex.unit===nu)ex.qty+=addQty;
+ else if(!isSpice&&nq>0&&ex.qty===0){ex.qty=addQty;ex.unit=nu;}
  }else{
- ingMap[key]={qty:isSpice?0:nq,unit:isSpice?'':nu,cat};
+ ingMap[key]={qty:isSpice?0:addQty,unit:isSpice?'':nu,cat};
  }
  });
  });
